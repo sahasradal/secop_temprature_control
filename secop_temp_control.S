@@ -3,7 +3,7 @@
 #riscv32-unknown-elf-objcopy -O ihex -R .bss -R .sbss a.out secop_temp_control.hex
 
 .include "ch32v003_reg1.inc"
-
+.equ RXNE,          0x20     		# Bit 5  - Receive Data Register Not Empty
 # Define ADC Thresholds (NTC: higher value = colder)
 .equ ADC_CUTOUT,    646    # ~3°C (Stop compressor if ADC >= 646)
 .equ ADC_CUTIN,     626    # ~5°C (Allow start if ADC <= 626)
@@ -20,8 +20,8 @@ mem:  .space 16      		# Allocate 16 bytes
 
 .align 4
 .section .text
-.global _start
-_start:
+.global start
+start:
 
    	la sp, STACK			# initialize stack pointer
 #Enable GPIO clocks & AFIO in APB2 clock register
@@ -132,9 +132,22 @@ adc_delay:
     addi t1, t1, -1
     bnez t1, adc_delay
 
-    # Initialize State Flag
-    # s1 = Compressor State (0 = OFF, 1 = ON)
-    li s1, 0
+	la x10,message1			# load address of label "name" to x10, string to be transmitted
+string_loop:
+	lb x8,0(x10)			# load 1 byte from 0 offset of "name"
+	beqz x8,finish			# if byte in x8 null branch to label "finish"
+	call USART_TX			# call subroutine USART_TX to transmit byte
+	addi x10,x10,1			# increase pointer by 1 byte
+	j string_loop			# jump back to label string_loop until null is encountered
+finish:
+	call delay1S
+
+    	# Initialize State Flag
+    	# s1 = Compressor State (0 = OFF, 1 = ON)
+    	li s1, 0
+
+
+
 
 main_loop:
 	# trigger conversion of piezo
@@ -150,26 +163,75 @@ wait_adc:
 	andi x11,x11,2			# adc conversion finish flag mask
 	beqz x11,wait_adc		# wait till bit 1 is set
 	la x10,R32_ADC_RDATAR		# ADC data register
-	lw s0,0(x10)			# Read current temperature value into s0
-	    
+	lw a5,0(x10)			# Read current temperature value into s0
+
+	mv a0,a5
+	call print_hex_32bit
+	li x8,'\r'
+	call USART_TX
+	li x8,'\n'
+	call USART_TX
+
+
+	mv a0,s1
+	call print_hex_32bit
+	li x8,'\r'
+	call USART_TX
+	li x8,'\n'
+	call USART_TX
+
+
+		    
 
 
     	# Evaluate Hysteresis
     	li t1, ADC_CUTOUT
-    	bge s0, t1, stop_compressor    # Temp <= 3°C -> Turn OFF
+
+	mv a0,t1
+	call print_hex_32bit
+	li x8,'\r'
+	call USART_TX
+	li x8,'\n'
+	call USART_TX
+
+    	bgeu a5, t1, stop_compressor    # Temp <= 3°C -> Turn OFF
+
 
     	li t1, ADC_CUTIN
-    	ble s0, t1, start_compressor   # Temp >= 5°C -> Turn ON
+    	bleu a5, t1, start_compressor   # Temp >= 5°C -> Turn ON
 
     	# If inside the deadband, make no state changes
+	li x8,'A'
+	call USART_TX
+	li x8,' '
+	call USART_TX
+	mv a0,s1
+	call print_hex_32bit
+	li x8,'\r'
+	call USART_TX
+	li x8,'\n'
+	call USART_TX
     	j loop_delay
 
 stop_compressor:
     	# Always force the pin low to be safe, update state to 0
-    	li t0, GPIOC_BASE
+    	la t0, R32_GPIOC_BSHR
     	li t1, (1 << 16)               # Clear PC0
-    	sw t1, GPIO_BSHR(t0)
+    	sw t1, 0(t0)
     	li s1, 0                       # State = OFF
+
+	li x8,'B'
+	call USART_TX
+	li x8,' '
+	call USART_TX
+	mv a0,s1
+	call print_hex_32bit
+	li x8,'\r'
+	call USART_TX
+	li x8,'\n'
+	call USART_TX
+    	
+
     	j loop_delay
 
 start_compressor:
@@ -178,26 +240,221 @@ start_compressor:
 
     	# State was 0 (OFF). This is a fresh transition to ON!
     	# Run the 5-minute pressure equalization delay BEFORE turning it on
-    	jal ra, delay_5_minutes
-
+    	call delay_5_minutes
+li x8,'S'
+call USART_TX
     	# Fire up the compressor
-    	li t0, GPIOC_BASE
+    	la t0, R32_GPIOC_BSHR
     	li t1, 1                       # Set PC0 HIGH
-    	sw t1, GPIO_BSHR(t0)
+    	sw t1, 0(t0)
     
     	li s1, 1                       # Update State = ON
+
+	li x8,'C'
+	call USART_TX
+	li x8,' '
+	call USART_TX
+	mv a0,s1
+	call print_hex_32bit
+	li x8,'\r'
+	call USART_TX
+	li x8,'\n'
+	call USART_TX
+    	j loop_delay
 
 loop_delay:
     	# 1-second sampling delay
     	li t1, 3000000
-1:  	addi t1, t1, -1
-    	bnez t1, 1b
+DL:  	addi t1, t1, -1
+    	bnez t1, DL
     	j main_loop
 
 # --- Delay Subroutine ---
 delay_5_minutes:
-    	li t3, 1800000000
+	addi sp,sp,-8
+	sw ra,0(sp)
+	sw t2,4(sp)
+    	li t2, 482400400      #(2010010 x 60 x 5=603003000), testing at 1 minute 120600100,241200200,361800300,482400400,603000500
 delay_loop:
-    	addi t3, t3, -1
-    	bnez t3, delay_loop
+    	addi t2, t2, -1
+    	bnez t2, delay_loop
+	lw t2,4(sp)
+	lw ra,0(sp)
+	addi sp,sp,8
     	ret
+
+
+
+###################################################################
+USART_TX:
+	addi sp,sp,-16			# add space in stack
+	sw ra,0(sp)			# push ra
+	sw x7,4(sp)			# push x7
+	sw x10,8(sp)			# push x10
+	sw x11,12(sp)			# push x11
+TX_loop:
+	la x10,R32_USART_STATR		# load address of usart status register
+	lw x11,0(x10)			# load contents of status register in x11
+	andi x11,x11,(1<<7)		# mask out 7th bit, transmit buffer empty flag
+	beqz x11,TX_loop		# if 0 transmit buffer full, wait until bit is set
+	#li x8,0x30
+	mv x7,x8			# move byte in x8(s0) to x7(t2) ( call USART_TX with byte in x8)
+	la x10,R32_USART_DATAR		# x10 has the address of data register
+	sb x7,0(x10)			# store byte in x7 to data register
+TC_check:
+	la x10,R32_USART_STATR		# get contents of status register again
+	lw x11,0(x10)
+	andi x11,x11,(1<<6)		# check transmit complete bit
+	beqz x11,TC_check		# wait if bit is 0 , when transmit complete = 1
+		
+	lw x11,12(sp)			# pop x11
+	lw x10,8(sp)			# pop x10
+	lw x7,4(sp)			# pop x7
+	lw ra,0(sp)			# pop ra
+	addi sp,sp,16			# set SP back 16 bytes
+	ret				# return to caller
+
+ 
+################################################################################
+#Helper: Read one byte from UART (polling)
+
+read_byte:
+	addi sp,sp,-8
+	sw ra,0(sp)
+	sw a1,4(sp)
+rb_loop:
+	la a0,R32_USART_STATR
+	lw a1,0(a0)
+	andi a1,a1, RXNE		# RXNE=0x20
+	beqz a1,rb_loop       		# Wait until RXNE == 1
+	la a0,R32_USART_DATAR  		# Read the byte into a0
+	lbu a0,0(a0)
+	lw a1,4(sp)
+	lw ra,0(sp)
+	addi sp,sp,8
+	ret
+###################################################################################
+
+######################################################################################
+# Input: x8 = Byte to print as Hex
+# Uses: x7, x8, x9
+print_hex_byte:
+    	addi sp, sp, -16
+    	sw ra, 0(sp)
+    	sw x8, 4(sp)            # Save original byte
+    	sw x7, 8(sp)
+    	sw x9,12(sp)
+
+   	 mv x9, x8               # Copy to x9
+    
+    	# Process High Nibble
+    	srli x8, x9, 4          # Shift right 4 bits
+    	call nibble_to_ascii
+    	call USART_TX
+    
+    	# Process Low Nibble
+    	andi x8, x9, 0x0F       # Mask lower 4 bits
+    	call nibble_to_ascii
+    	call USART_TX
+
+    	lw x9,12(sp)
+    	lw x7, 8(sp)
+    	lw x8, 4(sp)            # Restore x8
+    	lw ra, 0(sp)
+    	addi sp, sp, 16
+    	ret
+
+nibble_to_ascii:
+    	addi sp, sp, -12
+    	sw ra, 0(sp)
+	sw x7,4(sp)
+	sw x8,8(sp)
+    	li x7, 10
+    	blt x8, x7, is_digit
+    	addi x8, x8, 7          # Offset for A-F
+is_digit:
+    	addi x8, x8, 48         # Add ASCII '0'
+	lw x0,8(sp)
+	lw x7,4(sp)
+    	lw ra, 0(sp)
+    	addi sp, sp, 12
+    	ret
+
+
+#############################################################
+# =============================================
+# Simple 32-bit Hex Print (MSB first),value in a0
+# =============================================
+print_hex_32bit:
+    addi sp, sp, -12
+    sw ra, 0(sp)
+    sw x8, 4(sp)
+    sw t0, 8(sp)
+
+    mv t0, a0               # t0 = value to print
+
+    # Byte 3
+    srli x8, t0, 24
+    call print_hex_byte
+
+    # Byte 2
+    srli x8, t0, 16
+    andi x8, x8, 0xFF
+    call print_hex_byte
+
+    # Byte 1
+    srli x8, t0, 8
+    andi x8, x8, 0xFF
+    call print_hex_byte
+
+    # Byte 0
+    mv x8, t0
+    andi x8, x8, 0xFF
+    call print_hex_byte
+    lw t0, 8(sp)
+    lw x8, 4(sp)
+    lw ra, 0(sp)
+    addi sp, sp, 12
+    ret
+
+#############################################################
+###############################################################
+string_reader:
+	addi sp,sp,-8
+	sw ra,0(sp)
+	sw x8,4(sp)
+sr_loop:
+	lb x8,0(a2)			# load 1 byte from 0 offset of a2 pointing address
+	beqz x8,sr_finish		# if byte in x8 null branch to label "finish"
+	call USART_TX			# call subroutine USART_TX to transmit byte
+	addi a2,a2,1			# increase pointer by 1 byte
+	j sr_loop			# jump back to label string_loop until null is encountered
+sr_finish:
+	lw x8,4(sp)
+	lw ra,0(sp)
+	addi sp,sp,8
+	ret				# 
+
+###################################################################################
+delay1S: 
+	addi sp,sp,-8 			# push RA
+	sw ra,0(sp) 			# push RA
+	sw t1,4(sp)
+	li t1,2010010 			# load an arbitarary value 20000000 to t1 register 
+loop1s:
+	addi t1,t1,-1 			# subtract 1 from t1
+	bne t1,zero,loop1s 		# if t1 not equal to 0 branch to label loop
+	lw t1,4(sp)
+	lw ra,0(sp) 			# POP RA
+	addi sp,sp,8 			# pop RA
+	ret 
+########################################################
+
+.align 4
+.section .rodata
+.global message
+message1: .asciz "compressor control online\r\n "
+
+
+
+

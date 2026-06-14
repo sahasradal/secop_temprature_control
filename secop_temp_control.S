@@ -26,7 +26,7 @@ start:
    	la sp, STACK			# initialize stack pointer
 #Enable GPIO clocks & AFIO in APB2 clock register
         
-    	la x10,R32_RCC_APB2PCENR	# load address of APB2PCENR register to x10 ,for enabling GPIO A,D,C peripherals
+    la x10,R32_RCC_APB2PCENR	# load address of APB2PCENR register to x10 ,for enabling GPIO A,D,C peripherals
 	lw x11,0(x10)			# load contents from peripheral register R32_RCC_APB2PCENR pointed by x10
 	li x7,((1<<2)|(1<<4)|(1<<5)|(1<<0)|(1<<14)|(1<<9)|(1<<11))	# 1<<IOPA_EN,1<<IOPC_EN,1<<IOPD_EN,1<<AFIOEN,1<<USART ,1<<ADC enable port A,C,D and AFIO functions
 	or x11,x11,x7			# or values 
@@ -42,9 +42,9 @@ start:
 #configure GPIO C
 	la x10,R32_GPIOC_CFGLR		# load pointer x10 with address of R32_GPIOD_CFGLR , GPIO configuration register
 	lw x11,0(x10)			# load contents from register pointed by x10
-	li x7,~(0xf<<4)			#clear pc0. we need to setup PD5 & PD6 for usart tx and rx and pd4 for ADC7, pd3 for ADC4
+	li x7,~(0xf<<4)			#clear pc1. for compressor contrl
 	and x11,x11,x7			# clear pd4,pd5,pd6 mode and cnf bits for selected pin 
-	li x7,(0x3<<4)			# pc0 = output pushpull output 10mhz,
+	li x7,(0x3<<4)			# pc1 = output pushpull output 10mhz,
 	or x11,x11,x7			# OR value to register
 	sw x11,0(x10)			# store in R32_GPIOC_CFGLR
 
@@ -58,42 +58,42 @@ start:
 	sw x11,0(x10)			# store in R32_GPIOD_CFGLR
 
    	la t0, R32_GPIOC_BSHR
-    	li t1, (1 << 1)               	# set  PC1
-    	sw t1, 0(t0)
+    li t1, (1 << 1)               	# set  PC1 , makes the mosfet SI2300 conduct
+    sw t1, 0(t0)
 
 
 #configure USART baud
 	la x10,R32_USART_BRR		# USART BAUD setting
-	lw x11,0(x10)			# copy R32_USART_BRR to x11
+	lw x11,0(x10)				# copy R32_USART_BRR to x11
 	li x7,((52<<4)|(1<<0))		# 52.1 in BRR =9600
-	or x11,x11,x7			# or registers
-	sw x11,0(x10)			# store in R32_USART_BRR
+	or x11,x11,x7				# or registers
+	sw x11,0(x10)				# store in R32_USART_BRR
 
 #setup UART control and enable	
 	la x10,R32_USART_CTLR1		# load x10 with R32_USART_CTLR1 address
-	lw x11,0(x10)			# load to x11 contents
+	lw x11,0(x10)				# load to x11 contents
 	li x7,(1<<13)|(1<<3)|(1<<2)	# enable USART UE, TX,RX bits		# UE 
 	or x11,x11,x7
-	sw x11,0(x10)			# store back new values
+	sw x11,0(x10)				# store back new values
 
 #disable ADC before configuration
 	la x10,R32_ADC_CTLR2
 	lw x11,0(x10)
-	li x7,0xfffffffe		#disable ADON bit , 0 written in 0bit
+	li x7,0xfffffffe			#disable ADON bit , 0 written in 0bit
 	and x11,x11,x7
 	sw x11,0(x10)
 
 #set sequence of conversion channel
 	la x10,R32_ADC_RSQR3		# sequence register, if multiple sensors used we can determine the order of conversion
 	lw x11,0(x10)
-	li x7,(7<<0)			# AIN7 adc channel is written to sequence 1 and AIN4 to sequence 2
+	li x7,(7<<0)				# AIN7 adc channel is written to sequence 1 and AIN4 to sequence 2
 	or x11,x11,x7
 	sw x11,0(x10)
 
 #set sampling cycles
 	la x10,R32_ADC_SAMPTR2		# takes sampling cycles for each measurement
 	lw x11,0(x10)
-	li x7,(7<<21)			# 0b111/0x7 is 241 cycles for both ain7 and ain4	
+	li x7,(7<<21)				# 0b111/0x7 is 241 cycles for both ain7 and ain4	
 	or x11,x11,x7
 	sw x11,0(x10)
 
@@ -107,7 +107,7 @@ start:
 #reset calibrate ADC
 	la x10,R32_ADC_CTLR2
 	lw x11,0(x10)
-	li x7,(1<<3)			# reset calibration	
+	li x7,(1<<3)				# reset calibration	
 	or x11,x11,x7
 	sw x11,0(x10)
 check1:
@@ -119,7 +119,7 @@ check1:
 # calibrate ADC
 	la x10,R32_ADC_CTLR2
 	lw x11,0(x10)
-	li x7,(1<<2)			# start calibration	
+	li x7,(1<<2)				# start calibration	
 	or x11,x11,x7
 	sw x11,0(x10)
 check2:
@@ -147,9 +147,9 @@ string_loop:
 finish:
 	call delay1S
 
-    	# Initialize State Flag
-    	# s1 = Compressor State (0 = OFF, 1 = ON)
-    	li s1, 0
+    # Initialize State Flag
+    # s1 = Compressor State (0 = OFF, 1 = ON) , a4 is the moving exponential average
+    li s1, 0
 	li a4,0
 
 
@@ -163,22 +163,22 @@ main_loop:
 	sw x11,0(x10)
 
 wait_adc:
-	la x10,R32_ADC_STATR		# adc status register
+	la x10,R32_ADC_STATR			# adc status register
 	lw x11,0(x10)
-	andi x11,x11,2			# adc conversion finish flag mask
-	beqz x11,wait_adc		# wait till bit 1 is set
+	andi x11,x11,2				# adc conversion finish flag mask
+	beqz x11,wait_adc			# wait till bit 1 is set
 	la x10,R32_ADC_RDATAR		# ADC data register
-	lw a5,0(x10)			# Read current temperature value into s0
+	lw a5,0(x10)				# Read current temperature value into s0
 	andi a5, a5, 0x3FF       	# Clean 10-bit raw sample
 
 
 	# --- EMA FILTER MATH RUNS HERE ---
-    	# Formula: s4 = (a5 + s4 + s4 + s4) >> 2
-    	mv tp, a4                # t5 = Old Average
-    	slli gp, tp, 1           # t6 = Old Average * 2
-    	add tp, tp, gp           # t5 = Old Average * 3
-    	add tp, tp, a5           # t5 = Current Sample + (Old Average * 3)
-    	srli a4, tp, 2           # s4 = t5 / 4  (This is our new Filtered Average!)
+    # Formula: s4 = (a5 + s4 + s4 + s4) >> 2
+    mv tp, a4                	# t5 = Old Average
+    slli gp, tp, 1           	# t6 = Old Average * 2
+    add tp, tp, gp           	# t5 = Old Average * 3
+    add tp, tp, a5           	# t5 = Current Sample + (Old Average * 3)
+    srli a4, tp, 2           	# s4 = t5 / 4  (This is our new Filtered Average!)
 
 
 
@@ -203,8 +203,8 @@ wait_adc:
 		    
 
 
-    	# Evaluate Hysteresis
-    	li t1, ADC_CUTOUT
+    # Evaluate Hysteresis
+    li t1, ADC_CUTOUT
 
 	mv a0,t1
 	call print_hex_32bit
@@ -213,36 +213,22 @@ wait_adc:
 	li x8,'\n'
 	call USART_TX
 
-    	bgeu a4, t1, stop_compressor    # Temp <= 3°C -> Turn OFF
+    bgeu a4, t1, stop_compressor    # Temp <= 3°C -> Turn OFF
 
 
-    	li t1, ADC_CUTIN
-    	bleu a4, t1, start_compressor   # Temp >= 5°C -> Turn ON
+    li t1, ADC_CUTIN
+    bleu a4, t1, start_compressor   # Temp >= 5°C -> Turn ON
 
-    	# If inside the deadband, make no state changes
-	li x8,'A'
-	call USART_TX
-	li x8,' '
-	call USART_TX
-	mv a0,s1
-	call print_hex_32bit
-	li x8,'\r'
-	call USART_TX
-	li x8,'\n'
-	call USART_TX
-    	j loop_delay
+    # If inside the deadband, make no state changes
+	j loop_delay
 
 stop_compressor:
-    	# Always force the pin low to be safe, update state to 0
-    	la t0, R32_GPIOC_BSHR
-    	li t1, (1 << 1)               # Clear PC0
-    	sw t1, 0(t0)
-    	li s1, 0                       # State = OFF
-
-	li x8,'B'
-	call USART_TX
-	li x8,' '
-	call USART_TX
+    # Always force the pin low to be safe, update state to 0
+    la t0, R32_GPIOC_BSHR
+    li t1, (1 << 1)              	# set PC1 for mosfet to start conducting , pulls BLDC signal line 0
+    sw t1, 0(t0)
+    li s1, 0                       # State = OFF
+	
 	mv a0,s1
 	call print_hex_32bit
 	li x8,'\r'
@@ -251,35 +237,29 @@ stop_compressor:
 	call USART_TX
     	
 
-    	j loop_delay
+    j loop_delay
 
 start_compressor:
-    	# Check current state tracking register
-    	bnez s1, loop_delay            # If s1 == 1, it's already running. Skip everything.
+    # Check current state tracking register
+    bnez s1, loop_delay            # If s1 == 1, it's already running. Skip everything.
 
-    	# State was 0 (OFF). This is a fresh transition to ON!
-    	# Run the 5-minute pressure equalization delay BEFORE turning it on
-    	call delay_5_minutes
-li x8,'S'
-call USART_TX
-    	# Fire up the compressor
-    	la t0, R32_GPIOC_BSHR
-    	li t1, (1<<17)                       # Set PC0 HIGH
-    	sw t1, 0(t0)
+    # State was 0 (OFF). This is a fresh transition to ON!
+    # Run the 5-minute pressure equalization delay BEFORE turning it on
+    call delay_5_minutes
+   	# Fire up the compressor
+   	la t0, R32_GPIOC_BSHR
+   	li t1, (1<<17)                  # clear PC1 , mosfet stops conducting , BLDC signal line will return to set speed
+   	sw t1, 0(t0)
     
-    	li s1, 1                       # Update State = ON
-
-	li x8,'C'
-	call USART_TX
-	li x8,' '
-	call USART_TX
+    li s1, 1                       	# Update State = ON
+	
 	mv a0,s1
 	call print_hex_32bit
 	li x8,'\r'
 	call USART_TX
 	li x8,'\n'
 	call USART_TX
-    	j loop_delay
+    j loop_delay
 
 loop_delay:
     	# 1-second sampling delay
@@ -295,8 +275,8 @@ delay_5_minutes:
 	sw t2,4(sp)
     	li t2, 361800300      #(2010010 x 60 x 5=603003000), testing at 1 minute 120600100,241200200,361800300,482400400,603000500
 delay_loop:
-    	addi t2, t2, -1
-    	bnez t2, delay_loop
+    addi t2, t2, -1
+    bnez t2, delay_loop
 	lw t2,4(sp)
 	lw ra,0(sp)
 	addi sp,sp,8
